@@ -1,2 +1,3 @@
-# enactus_app
-Enactus Learning Platform Alpha
+# Enactus Learning Platform Alpha
+
+This is a repository for Enactus SG learning platform Alpha edition.
