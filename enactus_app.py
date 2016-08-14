@@ -9,8 +9,8 @@ app.config['SQLALCHEMY_DATABASE_URI'] = "mysql+pymysql://enactus:<localpassword>
 app.config['SQLALCHEMY_ECHO'] = True
 
 blueprint = make_google_blueprint(
-    client_id="<client_id>",
-    client_secret="<client_secret>",
+    client_id="test",
+    client_secret="test",
     scope=["profile", "email"]
 )
 app.register_blueprint(blueprint, url_prefix="/login")
