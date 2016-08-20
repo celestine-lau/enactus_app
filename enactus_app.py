@@ -129,6 +129,25 @@ def unauthorized(error):
     return render_template("unauthorized.html"), 401
 
 
+def populate_attrs_from_keys(dst, src, keys):
+    """ Populates an object's attributes with values from a source dict corresponding to given keys.
+    Ignores elements in the source dict that don't exist
+    Args:
+        dst: the target object
+        src: the source dict
+        keys: the keys to populate, if they exist
+
+    Returns: the target object
+
+    """
+    for key in keys:
+        if (key in src):
+            setattr(dst, key, src[key])
+    return dst
+
+# Request handlers
+
+
 @app.route("/")
 def index():
     if not google.authorized:
@@ -149,24 +168,63 @@ def index():
     #return "You are {name} [{email}] on Google".format(email=email, name=jsresp["displayName"])
 
 
-@app.route("/user/<username>", methods=["PUT"])
-def create_user(username):
-    try:
-        user = json.loads(request.data)
-        fname = user.get("first_name", "")
-        lname = user.get("last_name", "")
-    except ValueError:
-        return "Bad request"
-    return "Creating user %s with name %s %s" % (username, fname, lname)
-
-@app.route("/user/<id>", methods=["GET"])
+@app.route("/user/<userid>", methods=["GET"])
 @authorize_check(1)
-def show_user(id):
-    user = User.query.filter_by(id=id).first()
-    if (user is None):
+def show_user(userid):
+    user = User.query.filter_by(id=userid).first()
+    if user is None:
         return error_response(error_codes.NO_SUCH_USER, "No such user")
     return success_response(user)
 
+
+@app.route("/user", methods=["PUT"])
+@authorize_check(1)
+def update_user():
+    ### Update user fields
+    # Handles POST request to update user. Request body must contain user object.
+    # The fields that can be updated are: display_name, quiz_completed, goals_set and learning_profile
+    # Throws a 400 error if request is malformed
+    # Throws a 401 error if trying to change details of a user with higher privilege
+    jsondata = request.get_json()
+    if jsondata is None:
+        abort(400)
+    userid = jsondata.get("id", -1)
+    user = User.query.filter_by(id=userid).first()
+    if user is None:
+        return error_response(error_codes.NO_SUCH_USER, "No such user")
+    if user.email != session["username"] and session["privilege"] <= user.privilege:
+        abort(401)
+    if jsondata.get("display_name", "") == "":
+        return error_response(error_codes.DISPLAY_NAME_NOT_SPECIFIED, "Display name must be specified")
+    populate_attrs_from_keys(user, jsondata, ["display_name", "quiz_completed", "goals_set", "learning_profile"])
+    db.session.commit()
+    return success_response(user)
+
+
+@app.route("/user", methods=["POST"])
+@authorize_check(3)
+def create_user():
+    jsondata = request.get_json()
+    if jsondata is None:
+        abort(400)
+    if jsondata.get("email", "") == "":
+        return error_response(error_codes.EMAIL_NOT_SPECIFIED, "Email must be specified")
+    requested_email = jsondata["email"]
+    user = User.query.filter_by(email=requested_email).first()
+    if user is not None:
+        return error_response(error_codes.USER_ALREADY_EXISTS, "User already exists")
+    requested_privilege = jsondata.get("privilege", 0)
+    if requested_privilege < 1 or requested_privilege > 4:
+        return error_response(error_codes.INVALID_PRIVILEGE_LEVEL, "Invalid privilege specified")
+    if session["privilege"] == 3 and requested_privilege > 2:
+        return error_response(error_codes.INSUFFICIENT_PRIVILEGE, "Insufficient privilege to perform action")
+    if jsondata.get("display_name", "") == "":
+        return error_response(error_codes.DISPLAY_NAME_NOT_SPECIFIED, "Display name must be specified")
+    user = User(requested_email, requested_privilege)
+    populate_attrs_from_keys(user, jsondata, ["display_name", "quiz_completed", "goals_set", "learning_profile"])
+    db.session.add(user)
+    db.session.commit()
+    return success_response(user)
 
 @app.route("/evil")
 @authorize_check(5)
