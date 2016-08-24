@@ -36,7 +36,7 @@ class User(db.Model):
     quiz_completed = db.Column(db.Boolean)
     goals_set = db.Column(db.Boolean)
     learning_profile = db.Column(db.String(255))
-    tasks = db.relationship("TaskStatus", back_populates="user")
+    task_statuses = db.relationship("TaskStatus", back_populates="user")
 
     def __init__(self, email, privilege):
         self.email = email
@@ -95,7 +95,7 @@ class TaskStatus(db.Model):
     points = db.Column(db.Integer, nullable=False, default=0)
     __table_args__ = ( db.UniqueConstraint("user_id", "task_id", name="unique_user_task"), )
     task = db.relationship("Task")
-    user = db.relationship("User", back_populates="tasks")
+    user = db.relationship("User", back_populates="task_statuses")
 
     def serialize(self):
         return {
@@ -312,7 +312,7 @@ def get_tasks():
     user = User.query.filter_by(email=session["username"]).first()
     if user is None:
         abort(400)
-    return success_response(user.tasks)
+    return success_response(user.task_statuses)
 
 
 @app.route("/task", methods=["PUT"])
@@ -423,3 +423,107 @@ def create_task():
     except IntegrityError:
         return error_response(error_codes.DUPLICATE_TASK_NAME, "A task with that name already exists")
     return success_response(task)
+
+@app.route("/assign", methods=["POST"])
+@authorize_check(3)
+def assign_tasks():
+    ### Assign tasks to users
+    # Requires privilege level FF(3) and above
+    # Expects a json object of the form { "users": [id1, id2, ...], "tasks": [id1, id2, ...] }
+    # Ignores user and task ids that don't exist.
+    # For each user/task pair, will set taskStatus to "available" if currently in the "unavailable"
+    # or nonexistent state
+    jsondata = request.get_json()
+    if jsondata is None:
+        abort(400)
+    if "users" not in jsondata or "tasks" not in jsondata:
+        return error_response(error_codes.USERS_OR_TASKS_NOT_SPECIFIED, "Must specify users and tasks")
+    users = []
+    tasks = []
+    try:
+        for userid in jsondata["users"]:
+            try:
+                users.append(int(userid))
+            except ValueError:
+                pass
+    except TypeError:
+        try:
+            users.append(int(jsondata["users"]))
+        except ValueError:
+            return error_response(error_codes.INVALID_PARAMETERS, "users must be an id or array of ids")
+    try:
+        for taskid in jsondata["tasks"]:
+            try:
+                tasks.append(int(taskid))
+            except ValueError:
+                pass
+    except TypeError:
+        try:
+            tasks.append(int(jsondata["tasks"]))
+        except ValueError:
+            return error_response(error_codes.INVALID_PARAMETERS, "tasks must be an id or array of ids")
+    assign_tasks_helper(users, tasks)
+    return success_response("")
+
+@app.route("/assignAll", methods=["POST"])
+@authorize_check(3)
+def assign_all_tasks():
+    ### Assign tasks to users
+    # Requires privilege level FF(3) and above
+    # Expects a json object of the form { "users": [id1, id2, ...], "tasks": [id1, id2, ...] }
+    # Ignores user and task ids that don't exist.
+    # For each user/task pair, will set taskStatus to "available" if currently in the "unavailable"
+    # or nonexistent state
+    jsondata = request.get_json()
+    if jsondata is None:
+        abort(400)
+    if "users" not in jsondata:
+        return error_response(error_codes.USERS_OR_TASKS_NOT_SPECIFIED, "Must specify users")
+    users = []
+    tasks = []
+    try:
+        for userid in jsondata["users"]:
+            try:
+                users.append(int(userid))
+            except ValueError:
+                pass
+    except TypeError:
+        try:
+            users.append(int(jsondata["users"]))
+        except ValueError:
+            return error_response(error_codes.INVALID_PARAMETERS, "users must be an id or array of ids")
+    for result in Task.query.all():
+        tasks.append(result.id)
+    assign_tasks_helper(users, tasks)
+    return success_response("")
+
+
+def assign_tasks_helper(userids, taskids):
+    """
+    Helper method to assign specified tasks to specified users
+    :param userids: a list of user ids to assign the tasks to
+    :param taskids: a list of task ids to assign to the users
+    :return: true if successful
+    """
+    users = User.query.filter(User.id.in_(userids)).all()
+    tasks = Task.query.filter(Task.id.in_(taskids)).all()
+    for user in users:
+        existing_taskids = {}
+        for taskstatus in user.task_statuses:
+            existing_taskids[taskstatus.task_id] = taskstatus
+        for task in tasks:
+            if task.id in existing_taskids:
+                taskstatus = existing_taskids[task.id]
+                if taskstatus.status == constants.STATUS_UNAVAILABLE:
+                    taskstatus.status = constants.STATUS_AVAILABLE
+            else:
+                taskstatus = TaskStatus()
+                taskstatus.task = task
+                taskstatus.user = user
+                taskstatus.task_id = task.id
+                taskstatus.user_id = user.id
+                taskstatus.status = constants.STATUS_AVAILABLE
+                taskstatus.points = 0
+                db.session.add(taskstatus)
+    db.session.commit()
+    return True
