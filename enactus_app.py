@@ -2,6 +2,7 @@ from flask import Flask, json, request, redirect, url_for, session, escape, abor
 from oauthlib.oauth2.rfc6749.errors import InvalidGrantError, TokenExpiredError, OAuth2Error
 from flask_dance.contrib.google import make_google_blueprint, google
 from flask_sqlalchemy import SQLAlchemy
+from pymysql import IntegrityError
 from enactus_keys import ServerParams
 from functools import wraps
 import logging
@@ -312,3 +313,113 @@ def get_tasks():
     if user is None:
         abort(400)
     return success_response(user.tasks)
+
+
+@app.route("/task", methods=["PUT"])
+@authorize_check(3)
+def update_task():
+    ### Updates details about a task
+    # Requires privilege level FF(3) and above
+    # Image URL is checked against allowed image file extensions
+    # Task URL must end with .html
+    # IMPORTANT NOTE: client side Javascript must handle HTML escaping of URLs returned if rendered as HTML
+    jsondata = request.get_json()
+    if jsondata is None:
+        abort(400)
+    taskid = jsondata.get("id", -1)
+    task = Task.query.filter_by(id=taskid).first()
+    if task is None:
+        return error_response(error_codes.NO_SUCH_TASK, "No such task")
+    if "name" not in jsondata or jsondata["name"] == "":
+        return error_response(error_codes.INVALID_TASK_DETAILS, "Name must be specified")
+    try:
+        max_points = int(jsondata["max_points"])
+        type = int(jsondata["type"])
+        category = int(jsondata["category"])
+    except KeyError:
+        return error_response(error_codes.INVALID_TASK_DETAILS, "max_points, type and category must be specified")
+    except ValueError:
+        return error_response(error_codes.INVALID_TASK_DETAILS, "Invalid numerical value(s)")
+    if max_points <= 0 or max_points > 10000:
+        return error_response(error_codes.INVALID_TASK_DETAILS, "Max points must be between 1 and 10000")
+    type = min(max(type, 0), constants.MAX_TASK_TYPE)
+    category = min(max(category, 0), constants.MAX_CATEGORY)
+    if "image" in jsondata:
+        try:
+            tokens = jsondata["image"].split(".")
+            if len(tokens) == 1 or tokens[-1] not in constants.ALLOWED_IMAGE_EXTENSIONS:
+                return error_response(error_codes.INVALID_IMAGE_URL, "Image URL is invalid")
+        except AttributeError:
+            task.image = None
+    if "url" in jsondata:
+        try:
+            tokens = jsondata["url"].split(".")
+            if len(tokens) == 1 or tokens[-1] != "html":
+                return error_response(error_codes.INVALID_TASK_URL, "Task URL must end with .html")
+        except AttributeError:
+            task.url = None
+    task.max_points = max_points
+    task.type = type
+    task.category = category
+    populate_attrs_from_keys(task, jsondata, ["name", "description", "image", "url"])
+    try:
+        db.session.commit()
+    except IntegrityError:
+        return error_response(error_codes.DUPLICATE_TASK_NAME, "A task with that name already exists")
+    return success_response(task)
+
+
+@app.route("/task", methods=["POST"])
+@authorize_check(3)
+def create_task():
+    ### Creates a new task
+    # Requires privilege level FF(3) and above
+    # Image URL is checked against allowed image file extensions
+    # Task URL must end with .html
+    # IMPORTANT NOTE: client side Javascript must handle HTML escaping of URLs returned if rendered as HTML
+    jsondata = request.get_json()
+    if jsondata is None:
+        abort(400)
+    if "name" not in jsondata:
+        return error_response(error_codes.INVALID_TASK_DETAILS, "Name must be specified")
+    taskname = jsondata["name"]
+    task = Task.query.filter_by(name=taskname).first()
+    if task is not None:
+        return error_response(error_codes.DUPLICATE_TASK_NAME, "Task with that name already exists")
+    try:
+        max_points = int(jsondata["max_points"])
+        type = int(jsondata["type"])
+        category = int(jsondata["category"])
+    except KeyError:
+        return error_response(error_codes.INVALID_TASK_DETAILS, "max_points, type and category must be specified")
+    except ValueError:
+        return error_response(error_codes.INVALID_TASK_DETAILS, "Invalid numerical value(s)")
+    if max_points <= 0 or max_points > 10000:
+        return error_response(error_codes.INVALID_TASK_DETAILS, "Max points must be between 1 and 10000")
+    type = min(max(type, 0), constants.MAX_TASK_TYPE)
+    category = min(max(category, 0), constants.MAX_CATEGORY)
+    task = Task()
+    if "image" in jsondata:
+        try:
+            tokens = jsondata["image"].split(".")
+            if len(tokens) == 1 or tokens[-1] not in constants.ALLOWED_IMAGE_EXTENSIONS:
+                return error_response(error_codes.INVALID_IMAGE_URL, "Image URL is invalid")
+        except AttributeError:
+            task.image = None
+    if "url" in jsondata:
+        try:
+            tokens = jsondata["url"].split(".")
+            if len(tokens) == 1 or tokens[-1] != "html":
+                return error_response(error_codes.INVALID_TASK_URL, "Task URL must end with .html")
+        except AttributeError:
+            task.url = None
+    task.max_points = max_points
+    task.type = type
+    task.category = category
+    populate_attrs_from_keys(task, jsondata, ["name", "description", "image", "url"])
+    try:
+        db.session.add(task)
+        db.session.commit()
+    except IntegrityError:
+        return error_response(error_codes.DUPLICATE_TASK_NAME, "A task with that name already exists")
+    return success_response(task)

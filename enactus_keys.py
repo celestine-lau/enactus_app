@@ -1,6 +1,6 @@
 
 class ServerParams(object):
-    secret_key = "SECRET_KEY"
-    local_db_password = "LOCAL_DB_PWD"
-    google_clientid = "G_CLIENT_ID"
-    google_clientsecret = "G_CLIENT_SECRET"
+    secret_key = "DEVELOPMENT_KEY"
+    local_db_password = "7dh(IjMqS0pX,$d"
+    google_clientid = "631712374836-34jkveg70sbuoaolkdehepdfgqvagljj.apps.googleusercontent.com"
+    google_clientsecret = "SKwK-okFIqyUE-nYxbvZaJ2c"
