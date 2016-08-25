@@ -36,6 +36,8 @@ class User(db.Model):
     quiz_completed = db.Column(db.Boolean)
     goals_set = db.Column(db.Boolean)
     learning_profile = db.Column(db.String(255))
+    team_id = db.Column(db.Integer, db.ForeignKey('team.id'), nullable=True)
+    team = db.relationship("Team", back_populates="users")
     task_statuses = db.relationship("TaskStatus", back_populates="user")
 
     def __init__(self, email, privilege):
@@ -55,7 +57,8 @@ class User(db.Model):
             "privilege":self.privilege,
             "quiz_completed":self.quiz_completed,
             "goals_set":self.goals_set,
-            "learning_profile":self.learning_profile
+            "learning_profile":self.learning_profile,
+            "team_id":self.team_id
         }
 
 
@@ -99,12 +102,28 @@ class TaskStatus(db.Model):
 
     def serialize(self):
         return {
-            "user_id":self.user_id,
+            "user_id": self.user_id,
             "task": self.task.serialize(),
             "status": self.status,
             "points": self.points
         }
 
+
+class Team(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False, unique=True)
+    charter = db.Column(db.String(1000))
+    leader_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    users = db.relationship("User", back_populates="team")
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "charter": self.charter,
+            "leader_id": self.leader_id,
+            "users": [user.serialize() for user in self.users]
+        }
 
 class ResponseJson(object):
 
@@ -306,7 +325,7 @@ def show_task(taskid):
 
 @app.route("/tasks", methods=["GET"])
 @authorize_check(1)
-def get_tasks():
+def get_task_statuses():
     ### Show tasks that a user is assigned
     # Returns an array of taskStatus
     user = User.query.filter_by(email=session["username"]).first()
@@ -527,3 +546,16 @@ def assign_tasks_helper(userids, taskids):
                 db.session.add(taskstatus)
     db.session.commit()
     return True
+
+
+@app.route("/team/<teamid>", methods=["GET"])
+@authorize_check(1)
+def show_team(teamid):
+    ### Show a team's details
+    # Any user can view any team's details
+    team = Team.query.filter_by(id=teamid).first()
+    if team is None:
+        return error_response(error_codes.NO_SUCH_TEAM, "No such team")
+    return success_response(team)
+
+

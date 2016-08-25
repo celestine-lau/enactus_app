@@ -90,3 +90,4 @@ ENV/
 
 #secret keys
 enactus_keys.py
+.idea/

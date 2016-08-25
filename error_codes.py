@@ -1,6 +1,9 @@
 #General error codes
 INVALID_PARAMETERS = 1001
 
+#Error codes relating to teams
+NO_SUCH_TEAM = 1201
+
 #Error codes relating to users
 NO_SUCH_USER = 1301
 USER_ALREADY_EXISTS = 1302
