@@ -113,7 +113,7 @@ class Team(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False, unique=True)
     charter = db.Column(db.String(1000))
-    leader_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    leader_id = db.Column(db.Integer, nullable=True)
     users = db.relationship("User", back_populates="team")
 
     def serialize(self):
@@ -400,7 +400,7 @@ def create_task():
     if jsondata is None:
         abort(400)
     if "name" not in jsondata:
-        return error_response(error_codes.INVALID_TASK_DETAILS, "Name must be specified")
+        return error_response(error_codes.INVALID_TASK_DETAILS, "Must specify task name")
     taskname = jsondata["name"]
     task = Task.query.filter_by(name=taskname).first()
     if task is not None:
@@ -559,3 +559,53 @@ def show_team(teamid):
     return success_response(team)
 
 
+@app.route("/team", methods=["POST"])
+@authorize_check(2)
+def create_team():
+    ### Creates a new team
+    # Requires min privilege Exco(2)
+    jsondata = request.get_json()
+    if jsondata is None:
+        abort(400)
+    if "name" not in jsondata or jsondata["name"] == "":
+        return error_response(error_codes.TEAM_NAME_NOT_SPECIFIED, "Must specify team name")
+    teamname = jsondata["name"]
+    team = Team.query.filter_by(name=teamname).first()
+    if team is not None:
+        return error_response(error_codes.TEAM_ALREADY_EXISTS, "Team with that name already exists")
+    userids = []
+    if "userids" in jsondata:
+        try:
+            for id in jsondata["userids"]:
+                userids.append(id)
+        except (TypeError, ValueError):
+            return error_response(error_codes.INVALID_PARAMETERS, "userids must be an array of ids")
+        userids = list(set(userids))
+        users = User.query.filter(User.id.in_(userids)).all()
+        if len(users) != len(userids):
+            return error_response(error_codes.NO_SUCH_USER, "Non-existent user(s) specified")
+        userids = []
+        for user in users:
+            if user.team_id is not None and user.team_id > 0:
+                return error_response(error_codes.USERS_ALREADY_IN_TEAM, "User %d is already in a team" % user.id)
+            userids.append(user.id)
+    team = Team()
+    team.name = jsondata["name"]
+    try:
+        leader_id = int(jsondata["leader_id"])
+        if leader_id not in userids:
+            return error_response(error_codes.LEADER_NOT_IN_TEAM, "leader_id is not a member of the team")
+        team.leader_id = leader_id
+    except ValueError:
+        return error_response(error_codes.INVALID_PARAMETERS, "leader_id must be an id")
+    except KeyError:
+        pass
+    populate_attrs_from_keys(team, jsondata, "charter")
+    db.session.add(team)
+    db.session.commit()
+    if "userids" in jsondata:
+        for user in users:
+            user.team_id = team.id
+        db.session.commit()
+    team = Team.query.filter_by(id=team.id).first()
+    return success_response(team)
