@@ -125,6 +125,17 @@ class Team(db.Model):
             "users": [user.serialize() for user in self.users]
         }
 
+    def get_leader(self):
+        if self.leader_id is None:
+            return None
+        if hasattr(self, "leader"):
+            return getattr(self, "leader", None)
+        for user in self.users:
+            if user.id == self.leader_id:
+                self.leader = user
+                return self.leader
+        return None
+
 class ResponseJson(object):
 
     def __init__(self, success, code, data):
@@ -195,7 +206,7 @@ def authorize_check(level):
                 return redirect(url_for("google.login"))
             priv = session.get("privilege", 0)
             if (priv < level):
-                abort(401)
+                return error_response(error_codes.INSUFFICIENT_PRIVILEGE, error_codes.INSUFFICIENT_PRIVILEGE_STR)
             return func(*args, **kwargs)
         return func_wrapper
     return authorize_decorator
@@ -252,7 +263,7 @@ def show_user(userid):
     # Any user can view any other user's details
     user = User.query.filter_by(id=userid).first()
     if user is None:
-        return error_response(error_codes.NO_SUCH_USER, "No such user")
+        return error_response(error_codes.NO_SUCH_USER, error_codes.NO_SUCH_USER_STR)
     return success_response(user)
 
 
@@ -262,17 +273,16 @@ def update_user():
     ### Update user fields
     # Handles PUT request to update user. Request body must contain user object.
     # The fields that can be updated are: display_name, quiz_completed, goals_set and learning_profile
-    # Throws a 400 error if request is malformed
-    # Throws a 401 error if trying to change details of a user with higher privilege
+    # Users may only change their own details, and details of users with lower privilege than them
     jsondata = request.get_json()
     if jsondata is None:
         abort(400)
     userid = jsondata.get("id", -1)
     user = User.query.filter_by(id=userid).first()
     if user is None:
-        return error_response(error_codes.NO_SUCH_USER, "No such user")
+        return error_response(error_codes.NO_SUCH_USER, error_codes.NO_SUCH_USER_STR)
     if user.email != session["username"] and session["privilege"] <= user.privilege:
-        abort(401)
+        return error_response(error_codes.INSUFFICIENT_PRIVILEGE, error_codes.INSUFFICIENT_PRIVILEGE_STR)
     if jsondata.get("display_name", "") == "":
         return error_response(error_codes.DISPLAY_NAME_NOT_SPECIFIED, "Display name must be specified")
     populate_attrs_from_keys(user, jsondata, ["display_name", "quiz_completed", "goals_set", "learning_profile"])
@@ -297,11 +307,14 @@ def create_user():
     user = User.query.filter_by(email=requested_email).first()
     if user is not None:
         return error_response(error_codes.USER_ALREADY_EXISTS, "User already exists")
-    requested_privilege = jsondata.get("privilege", 0)
+    try:
+        requested_privilege = int(jsondata.get("privilege", 0))
+    except (TypeError, ValueError):
+        return error_response(error_codes.INVALID_PRIVILEGE_LEVEL, "Invalid privilege specified")
     if requested_privilege < 1 or requested_privilege > 4:
         return error_response(error_codes.INVALID_PRIVILEGE_LEVEL, "Invalid privilege specified")
     if session["privilege"] == 3 and requested_privilege > 2:
-        return error_response(error_codes.INSUFFICIENT_PRIVILEGE, "Insufficient privilege to perform action")
+        return error_response(error_codes.INSUFFICIENT_PRIVILEGE, error_codes.INSUFFICIENT_PRIVILEGE_STR)
     if jsondata.get("display_name", "") == "":
         return error_response(error_codes.DISPLAY_NAME_NOT_SPECIFIED, "Display name must be specified")
     user = User(requested_email, requested_privilege)
@@ -319,20 +332,30 @@ def show_task(taskid):
     # TODO: Check if it is necessary to prevent users from viewing tasks that are unassigned/unavailable
     task = Task.query.filter_by(id=taskid).first()
     if task is None:
-        return error_response(error_codes.NO_SUCH_TASK, "No such task")
+        return error_response(error_codes.NO_SUCH_TASK, error_codes.NO_SUCH_TASK_STR)
     return success_response(task)
 
 
 @app.route("/tasks", methods=["GET"])
 @authorize_check(1)
 def get_task_statuses():
-    ### Show tasks that a user is assigned
-    # Returns an array of taskStatus
+    ### Show tasks that the current user is assigned
+    # Returns an array of taskStatus assigned to the current user
     user = User.query.filter_by(email=session["username"]).first()
     if user is None:
         abort(400)
     return success_response(user.task_statuses)
 
+
+@app.route("/user/<userid>/tasks", methods=["GET"])
+@authorize_check(3)
+def get_task_statuses_of_user(userid):
+    ### Show tasks that are assigned to a specified user
+    # Returns an array of taskStatus that are assigned to the specified user
+    user = User.query.filter_by(id=userid).first()
+    if user is None:
+        return error_response(error_codes.NO_SUCH_USER, error_codes.NO_SUCH_USER_STR)
+    return success_response(user.task_statuses)
 
 @app.route("/task", methods=["PUT"])
 @authorize_check(3)
@@ -348,7 +371,7 @@ def update_task():
     taskid = jsondata.get("id", -1)
     task = Task.query.filter_by(id=taskid).first()
     if task is None:
-        return error_response(error_codes.NO_SUCH_TASK, "No such task")
+        return error_response(error_codes.NO_SUCH_TASK, error_codes.NO_SUCH_TASK_STR)
     if "name" not in jsondata or jsondata["name"] == "":
         return error_response(error_codes.INVALID_TASK_DETAILS, "Name must be specified")
     try:
@@ -357,7 +380,7 @@ def update_task():
         category = int(jsondata["category"])
     except KeyError:
         return error_response(error_codes.INVALID_TASK_DETAILS, "max_points, type and category must be specified")
-    except ValueError:
+    except (TypeError, ValueError):
         return error_response(error_codes.INVALID_TASK_DETAILS, "Invalid numerical value(s)")
     if max_points <= 0 or max_points > 10000:
         return error_response(error_codes.INVALID_TASK_DETAILS, "Max points must be between 1 and 10000")
@@ -411,7 +434,7 @@ def create_task():
         category = int(jsondata["category"])
     except KeyError:
         return error_response(error_codes.INVALID_TASK_DETAILS, "max_points, type and category must be specified")
-    except ValueError:
+    except (TypeError, ValueError):
         return error_response(error_codes.INVALID_TASK_DETAILS, "Invalid numerical value(s)")
     if max_points <= 0 or max_points > 10000:
         return error_response(error_codes.INVALID_TASK_DETAILS, "Max points must be between 1 and 10000")
@@ -489,8 +512,8 @@ def assign_tasks():
 def assign_all_tasks():
     ### Assign tasks to users
     # Requires privilege level FF(3) and above
-    # Expects a json object of the form { "users": [id1, id2, ...], "tasks": [id1, id2, ...] }
-    # Ignores user and task ids that don't exist.
+    # Expects a json object of the form { "users": [id1, id2, ...] }
+    # Ignores user ids that don't exist.
     # For each user/task pair, will set taskStatus to "available" if currently in the "unavailable"
     # or nonexistent state
     jsondata = request.get_json()
@@ -553,10 +576,25 @@ def assign_tasks_helper(userids, taskids):
 def show_team(teamid):
     ### Show a team's details
     # Any user can view any team's details
+    # Returns the Team object corresponding to the id
     team = Team.query.filter_by(id=teamid).first()
     if team is None:
-        return error_response(error_codes.NO_SUCH_TEAM, "No such team")
+        return error_response(error_codes.NO_SUCH_TEAM, error_codes.NO_SUCH_TEAM_STR)
     return success_response(team)
+
+
+@app.route("/teams", methods=["GET"])
+@authorize_check(1)
+def get_teams():
+    ### Searches for all teams.
+    # Any user can search for all teams
+    # If parameter "name" is specified in the request args, then the list of teams will be filtered and
+    # only those containing the specified "name" will be returned
+    #
+    # Returns an array of Teams matching the criteria
+    search_name = request.args.get("name", "")
+    teams = Team.query.filter(Team.name.like("%" + search_name + "%"))
+    return success_response(teams)
 
 
 @app.route("/team", methods=["POST"])
@@ -564,10 +602,15 @@ def show_team(teamid):
 def create_team():
     ### Creates a new team
     # Requires min privilege Exco(2)
+    # Creates a new team with the specified name and charter (if provided). If userids are provided, and these
+    # users are not already in a team, they will be added to the team. If leader_id is provided, and is the id
+    # of a valid user in the team, that user will be assigned as the leader of the team.
+
+    # Returns the team created if successful
     jsondata = request.get_json()
     if jsondata is None:
         abort(400)
-    if "name" not in jsondata or jsondata["name"] == "":
+    if "name" not in jsondata or jsondata["name"] == "" or jsondata["name"] is None:
         return error_response(error_codes.TEAM_NAME_NOT_SPECIFIED, "Must specify team name")
     teamname = jsondata["name"]
     team = Team.query.filter_by(name=teamname).first()
@@ -609,3 +652,95 @@ def create_team():
         db.session.commit()
     team = Team.query.filter_by(id=team.id).first()
     return success_response(team)
+
+
+@app.route("/team", methods=["PUT"])
+def update_team():
+    ### Updates a team's details
+    # Team leaders may update their own team's name and charter
+    # Minimum privilege of Exco(2) is required to update a team's membership and leader, or other team's name and
+    # charter.
+    # Updates a team with the specified id. If specified, name and charter will be updated. If userids are provided,
+    # and these users are not already in a team, they will be added to the team. Existing members who are not specified
+    # will be removed from the team.If leader_id is provided, and is the id of a valid user in the team, that user will
+    # be assigned as the leader of the team. Team leaders can use this method to transfer leadership.
+    #
+    # Returns the modified team if successful
+    jsondata = request.get_json()
+    if jsondata is None:
+        abort(400)
+    teamid = jsondata.get("id", -1)
+    team = Team.query.filter_by(id=teamid).first()
+    if team is None:
+        return error_response(error_codes.NO_SUCH_TEAM, error_codes.NO_SUCH_TEAM_STR)
+    if session["privilege"] == 1:
+        team_leader = team.get_leader()
+        if team_leader.email != session["username"]:
+            return error_response(error_codes.INSUFFICIENT_PRIVILEGE, "You are not the team's leader")
+        if "userids" in jsondata:
+            return error_response(error_codes.INSUFFICIENT_PRIVILEGE,
+                                  "Team leaders may not update the team's membership")
+    if "name" in jsondata and jsondata["name"] != team.name:
+        if Team.query.filter_by(name=jsondata["name"]).first() is not None:
+            return error_response(error_codes.TEAM_ALREADY_EXISTS, "Team with that name already exists")
+        if jsondata["name"] == "" or jsondata["name"] is None:
+            return error_response(error_codes.TEAM_NAME_NOT_SPECIFIED, "Must specify team name")
+        team.name = jsondata["name"]
+    if "charter" in jsondata:
+        team.charter = jsondata["charter"]
+    userids = []
+    current_userids = [] # the list of existing team members who will remain in the team
+    new_userids = [] # the list of new team members who previously are not in the team
+    if "userids" in jsondata:
+        try:
+            for id in jsondata["userids"]:
+                userids.append(id)
+        except (TypeError, ValueError):
+            return error_response(error_codes.INVALID_PARAMETERS, "userids must be an array of ids")
+        userids = list(set(userids))
+        print userids
+        for user in team.users:
+            if user.id not in userids:
+                print "Unsetting team no of %d" % user.id
+                user.team_id = None
+            else:
+                current_userids.append(user.id)
+        for id in userids:
+            if id not in current_userids:
+                new_userids.append(id)
+        if len(new_userids) > 0:
+            users = User.query.filter(User.id.in_(new_userids)).all()
+            if len(users) != len(new_userids):
+                return error_response(error_codes.NO_SUCH_USER, "Non-existent user(s) specified")
+            for user in users:
+                if user.team_id is not None and user.team_id > 0 and user.team_id != team.id:
+                    return error_response(error_codes.USERS_ALREADY_IN_TEAM, "User %d is already in a team" % user.id)
+                else:
+                    user.team_id = team.id
+    else:
+        for user in team.users:
+            current_userids.append(user.id)
+    if "leader_id" in jsondata:
+        try:
+            leader_id = int(jsondata["leader_id"])
+        except (TypeError, ValueError):
+            return error_response(error_codes.INVALID_PARAMETERS, "leader_id must be an id")
+        if leader_id not in new_userids and leader_id not in current_userids:
+            return error_response(error_codes.LEADER_NOT_IN_TEAM, "leader_id is not a member of the team")
+        team.leader_id = leader_id
+    db.session.commit()
+    team = Team.query.filter_by(id=team.id).first()
+    return success_response(team)
+
+
+@app.route("/team/<teamid>", methods=["DELETE"])
+@authorize_check(3)
+def delete_team(teamid):
+    ### Deletes a team
+    # Requires minimum privilege of FF(3)
+    team = Team.query.filter_by(id=teamid).first()
+    if team is None:
+        return error_response(error_codes.NO_SUCH_TEAM, error_codes.NO_SUCH_TEAM_STR)
+    db.session.delete(team)
+    db.session.commit()
+    return success_response("")
