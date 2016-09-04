@@ -267,6 +267,16 @@ def show_user(userid):
     return success_response(user)
 
 
+@app.route("/user", methods=["GET"])
+@authorize_check(1)
+def show_current_user():
+    ### Shows the current user's details
+    user = User.query.filter_by(email=session["username"]).first()
+    if user is None:
+        return error_response(error_codes.NO_SUCH_USER, error_codes.NO_SUCH_USER_STR)
+    return success_response(user)
+
+
 @app.route("/user", methods=["PUT"])
 @authorize_check(1)
 def update_user():
@@ -698,10 +708,8 @@ def update_team():
         except (TypeError, ValueError):
             return error_response(error_codes.INVALID_PARAMETERS, "userids must be an array of ids")
         userids = list(set(userids))
-        print userids
         for user in team.users:
             if user.id not in userids:
-                print "Unsetting team no of %d" % user.id
                 user.team_id = None
             else:
                 current_userids.append(user.id)
