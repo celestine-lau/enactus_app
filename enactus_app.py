@@ -1,4 +1,4 @@
-from flask import Flask, json, request, redirect, url_for, session, escape, abort, render_template, jsonify
+from flask import Flask, json, request, redirect, url_for, session, escape, abort, render_template, jsonify, g
 from oauthlib.oauth2.rfc6749.errors import InvalidGrantError, TokenExpiredError, OAuth2Error
 from flask_dance.contrib.google import make_google_blueprint, google
 from flask_sqlalchemy import SQLAlchemy
@@ -752,3 +752,12 @@ def delete_team(teamid):
     db.session.delete(team)
     db.session.commit()
     return success_response("")
+
+
+### Template routing
+@app.route("/test", methods=["GET"])
+@authorize_check(1)
+def test_method():
+    user = User.query.filter_by(email=session["username"]).first()
+    g.name = user.display_name
+    return render_template("test.html")
